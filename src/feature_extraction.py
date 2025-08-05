@@ -51,9 +51,14 @@ import pandas as pd
 import json
 import os
 import datetime
+from dotenv import load_dotenv
 
+load_dotenv()
+
+base_dir = os.getenv('base_dir')
+BASE_DIR = f"{base_dir}/data/"
 # === Configurable Paths ===
-BASE_DIR = "/Users/mannpatel/Desktop/RMS/Implementation/data"
+
 OFFSET_PATH = os.path.join(BASE_DIR, "offset.json")
 KS_PATH = os.path.join(BASE_DIR, "keystroke_features.csv")
 MM_PATH = os.path.join(BASE_DIR, "mouse_motion_features.csv")

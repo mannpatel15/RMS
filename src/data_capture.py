@@ -189,9 +189,14 @@ from datetime import datetime
 import logging
 import pandas as pd
 import numpy as np
+from dotenv import load_dotenv
 
+load_dotenv()
+
+base_dir = os.getenv('base_dir')
+data_dir = f"{base_dir}/data/"
 # === File Setup ===
-data_dir = "/Users/mannpatel/Desktop/RMS/Implementation/data"
+
 os.makedirs(data_dir, exist_ok=True)
 
 keyboard_file = os.path.join(data_dir, "keyboard_raw.csv")

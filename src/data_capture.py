@@ -274,6 +274,8 @@ def on_press(key):
     kb_file.flush()
 
 def on_release(key):
+    if kb_file.closed:
+        return
     kb_writer.writerow(["release", time.time(), datetime.now()])
     kb_file.flush()
     # if key == keyboard.Key.esc:

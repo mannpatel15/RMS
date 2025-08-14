@@ -89,13 +89,17 @@ def generate_cd_from_new_data(label=1):
     new_mc = mouse_click_df[offsets["mouse_click"]:]
 
     # Skip if data is insufficient or contains incomplete rows
+    total_activity = len(new_ks) + len(new_mm) + len(new_mc)
+
     if (
-        len(new_ks) < 4 and len(new_mm) < 10 and len(new_mc) < 2
+        total_activity < 20  # <-- global threshold check here
+        or (len(new_ks) < 4 and len(new_mm) < 10 and len(new_mc) < 2)
         or new_ks.isnull().values.any()
         or new_mm.isnull().values.any()
         or new_mc.isnull().values.any()
     ):
         return None
+
 
     # Generate CD vector
     from generate_cd_vector import generate_cd_vector

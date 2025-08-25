@@ -1,1 +1,0 @@
-["MeanHoldTime", "StdHoldTime", "MeanSpeed", "StdSpeed", "MeanAcceleration", "StdAcceleration", "MeanClickDuration", "StdClickDuration", "KeystrokeCount", "MouseMoveCount", "MouseClickCount"]

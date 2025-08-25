@@ -1,525 +1,410 @@
-#!/usr/bin/env python3
-# """
-# monitor_online_adaptive.py
+# # monitor_online_adaptive.py
+# import os
+# import json
+# import time
+# import joblib
+# import pandas as pd
+# from pathlib import Path
+# from sklearn.ensemble import IsolationForest
+# from dotenv import load_dotenv
 
-# Continuously monitors cd_vector.csv, scores new rows with an ensemble
-# (OneClassSVM, IsolationForest, LSTM-AE), triggers intrusion action on
-# K consecutive anomalies, and adaptively retrains on accepted owner data.
+# # ======================
+# # Load ENV
+# # ======================
+# load_dotenv()
+# BASE_DIR = os.getenv("BASE_DIR", str(Path(__file__).resolve().parent.parent))
+# MODEL_DIR = os.path.join(BASE_DIR, "models")
+# DATA_DIR = os.path.join(BASE_DIR, "data", "preprocessed")
+# STATE_FILE = os.path.join(BASE_DIR, "cua_state.json")
+# print(MODEL_DIR)
+# # ======================
+# # Load Model
+# # ======================
+# import os
+# import sys
 
-# Place this file at: Implementation/src/monitor_online_adaptive.py
-# """
+# # Absolute path to models directory
+
+# # Required models
+# required_models = [
+#     "isolation_forest.pkl",
+#     "lof.pkl",
+#     "oneclass_svm.pkl",
+#     "elliptic_envelope.pkl",
+#     "rf_model.pkl",
+#     "scaler.pkl",
+#     "imputer.pkl",
+#     "feature_names.pkl",   # change from json to pkl
+#     "training_meta.json"
+# ]
+
+# # Check if all required models exist
+# missing = [m for m in required_models if not os.path.exists(os.path.join(MODEL_DIR, m))]
+# print("DEBUG: Checking models in", MODEL_DIR)
+# print("DEBUG: Files available:", os.listdir(MODEL_DIR))
+# if missing:
+#     print(f"[WARN] Missing required models: {missing}")
+#     print("Please run train_models.py first to generate them.")
+#     sys.exit(1)
+# else:
+#     print(f"[INFO] All required models found in {MODEL_DIR}")
+    
+
+    
+# def load_model():
+#     import os, pickle, json
+#     from tensorflow.keras.models import load_model as keras_load
+
+#     model_dir = "/Users/mannpatel/Desktop/RMS/Implementation/models"
+
+#     models = {}
+
+#     # Example: Random Forest
+#     rf_path = os.path.join(model_dir, "rf_model.pkl")
+#     if os.path.exists(rf_path):
+#         with open(rf_path, "rb") as f:
+#             models["rf"] = pickle.load(f)
+
+#     # Example: Isolation Forest
+#     if_path = os.path.join(model_dir, "isolation_forest.pkl")
+#     if os.path.exists(if_path):
+#         with open(if_path, "rb") as f:
+#             models["isolation_forest"] = pickle.load(f)
+
+#     # Example: LSTM Autoencoder
+#     lstm_path = os.path.join(model_dir, "lstm_autoencoder.keras")
+#     if os.path.exists(lstm_path):
+#         models["lstm_autoencoder"] = keras_load(lstm_path)
+
+#     # Meta info (optional)
+#     meta_path = os.path.join(model_dir, "training_meta.json")
+#     if os.path.exists(meta_path):
+#         with open(meta_path, "r") as f:
+#             models["meta"] = json.load(f)
+
+#     if not models:
+#         return None  # truly nothing found
+#     return models
+
+# # ======================
+# # Load State
+# # ======================
+# def load_state():
+#     if os.path.exists(STATE_FILE):
+#         with open(STATE_FILE, "r") as f:
+#             return json.load(f)
+#     return {"trained_rows": 0, "retrain_threshold": 200}
+
+# def save_state(state):
+#     with open(STATE_FILE, "w") as f:
+#         json.dump(state, f, indent=4)
+
+# # ======================
+# # Capture user activity (dummy example, replace with real keylog/app usage)
+# # ======================
+# def capture_user_activity():
+#     # Example: collect session features
+#     return {
+#         "keystroke_speed": 2.1,
+#         "mouse_movement": 0.9,
+#         "active_app": 3,  # encoded app id
+#     }
+
+# # ======================
+# # Adaptive Training
+# # ======================
+# def retrain_model(data):
+#     print("[INFO] Retraining model with new data...")
+#     model = IsolationForest(
+#         n_estimators=150, max_samples="auto", contamination=0.05, random_state=42
+#     )
+#     model.fit(data)
+#     model_path = os.path.join(MODEL_DIR, "cua_model.pkl")
+#     joblib.dump(model, model_path)
+#     print("[INFO] Model retrained and saved.")
+#     return model
+
+# # ======================
+# # Main Monitor Loop
+# # ======================
+# def main():
+#     model = load_model()
+#     if not model:
+#         print("[WARN] No pre-trained model found. Please run train_models.py first.")
+#         return
+
+#     state = load_state()
+#     print(f"[INFO] Starting CUA monitor. Rows already trained: {state['trained_rows']}")
+
+#     buffer = []  # holds new rows until retrain
+
+#     while True:
+#         activity = capture_user_activity()
+#         df = pd.DataFrame([activity])
+
+#         # Predict
+#         prediction = model.predict(df)[0]  # 1 = owner, -1 = intruder
+#         if prediction == 1:
+#             print("[OK] Owner detected")
+#             buffer.append(activity)
+#         else:
+#             print("[ALERT] Intruder detected!")
+
+#         # Retrain when buffer large enough
+#         if len(buffer) >= state["retrain_threshold"]:
+#             df_new = pd.DataFrame(buffer)
+#             model = retrain_model(df_new)
+#             state["trained_rows"] += len(buffer)
+#             save_state(state)
+#             buffer = []
+
+#         time.sleep(2)  # poll every 2 sec
+
+# if __name__ == "__main__":
+#     main()
+
+
 
 import os
-import time
 import json
+import time
+import pickle
 import joblib
-import traceback
-from collections import deque
-from datetime import datetime
-
 import numpy as np
 import pandas as pd
+import tensorflow.keras as keras
+from collections import deque
 
-from dotenv import load_dotenv
-from sklearn.preprocessing import StandardScaler
-from sklearn.svm import OneClassSVM
-from sklearn.ensemble import IsolationForest
+# --- Constants and File Paths ---
+STATE_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "cua_state.json"))
+CD_VECTOR_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "cd_vector.csv"))
+MODEL_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models"))
 
-# tensorflow imports (used only if available)
-from tensorflow.keras.models import load_model, Sequential
-from tensorflow.keras.layers import LSTM, RepeatVector, TimeDistributed, Dense
+# ------------------------------------------------------------------
+# Model and State Loading Functions
+# ------------------------------------------------------------------
 
-load_dotenv()
+def load_models(model_dir):
+    """Loads all model artifacts from the specified directory."""
+    models = {}
+    print(f"DEBUG: Loading models from {model_dir}")
+    for fname in os.listdir(model_dir):
+        fpath = os.path.join(model_dir, fname)
+        key = fname.split(".")[0]
 
-# -------------------------
-# CONFIG (tweak to taste)
-# -------------------------
-BASE_DIR = os.getenv("base_dir", "/Users/mannpatel/Desktop/RMS/Implementation")
-DATA_CSV = os.path.join(BASE_DIR, "data", "cd_vector.csv")
-MODELS_DIR = os.path.join(BASE_DIR, "models")
-
-POLL_SEC = 1.0          # how often to check file for new rows
-TIMESTEPS = 10          # must match training LSTM timesteps
-VOTE_THRES = 2          # how many model votes required to mark an intruder (>=)
-CONSEC_K = 3            # consecutive intrusions to trigger action
-FORGIVE_ROWS = 20       # after intrusion, accept next N rows if not extreme
-WINDOW_SIZE = 1500      # sliding owner buffer for retraining
-RETRAIN_AFTER = 300     # retrain after this many newly accepted owner rows
-MAX_POISON_RATE = 0.3   # if >30% of recent owner-buffer rows look anomalous, skip retrain
-
-# persistence
-OFFSET_PATH = os.path.join(MODELS_DIR, "monitor_offset.json")
-FEATURE_NAMES_PATH = os.path.join(MODELS_DIR, "feature_names.pkl")  # joblib dump
-SCALER_PATH = os.path.join(MODELS_DIR, "scaler.pkl")
-OCSVM_PATH = os.path.join(MODELS_DIR, "oneclass_svm.pkl")
-ISO_PATH = os.path.join(MODELS_DIR, "isolation_forest.pkl")
-LSTM_MODEL_PATH = os.path.join(MODELS_DIR, "lstm_autoencoder.h5")
-LSTM_THR_PATH = os.path.join(MODELS_DIR, "lstm_threshold.pkl")
-
-# -------------------------
-# Helpers
-# -------------------------
-def safe_load(path, loader=joblib.load):
-    try:
-        return loader(path)
-    except Exception:
-        return None
-
-def save_offset(val):
-    try:
-        os.makedirs(MODELS_DIR, exist_ok=True)
-        with open(OFFSET_PATH, "w") as f:
-            json.dump({"last_row": val}, f)
-    except Exception:
-        pass
-
-def load_offset():
-    try:
-        if os.path.exists(OFFSET_PATH):
-            with open(OFFSET_PATH, "r") as f:
-                return json.load(f).get("last_row", 0)
-    except Exception:
-        pass
-    return 0
-
-def build_lstm_autoencoder(timesteps, n_features):
-    model = Sequential([
-        LSTM(64, activation="relu", input_shape=(timesteps, n_features), return_sequences=False),
-        RepeatVector(timesteps),
-        LSTM(64, activation="relu", return_sequences=True),
-        TimeDistributed(Dense(n_features))
-    ])
-    model.compile(optimizer="adam", loss="mse")
-    return model
-
-# -------------------------
-# Prepare / align features
-# -------------------------
-def load_feature_order():
-    # prefer joblib pickle list; fallback to json or None
-    fn = None
-    try:
-        if os.path.exists(FEATURE_NAMES_PATH):
-            fn = joblib.load(FEATURE_NAMES_PATH)
-    except Exception:
         try:
-            jpath = FEATURE_NAMES_PATH.replace(".pkl", ".json")
-            if os.path.exists(jpath):
-                with open(jpath, "r") as f:
-                    fn = json.load(f)
-        except Exception:
-            fn = None
-    return fn
+            if fname.endswith(".pkl"):
+                models[key] = joblib.load(fpath)
+            elif fname.endswith(".json"):
+                with open(fpath, "r") as f:
+                    models[key] = json.load(f)
+            elif fname.endswith(".npy"):
+                models[key] = np.load(fpath, allow_pickle=True)
+            elif fname.endswith(".keras"):
+                models[key] = keras.models.load_model(fpath)
+        except Exception as e:
+            print(f"[WARN] Could not load {fname}: {e}")
 
-def prepare_features(df: pd.DataFrame, feature_order):
-    # Drop meta
-    df = df.copy()
-    df = df.drop(columns=[c for c in ["Label", "Timestamp"] if c in df.columns], errors="ignore")
+    print("[INFO] Models loaded:", list(models.keys()))
+    return models
 
-    # If feature_order known, ensure those columns exist (fill missing with 0)
-    if feature_order:
-        for c in feature_order:
-            if c not in df.columns:
-                df[c] = 0.0
-        df = df[feature_order]  # keep training order
-    else:
-        # fallback: keep numeric columns only
-        df = df.select_dtypes(include=[np.number])
-
-    # Fill numeric NaNs with column mean
-    if not df.empty:
-        df = df.fillna(df.mean(numeric_only=True))
-        df = df.apply(pd.to_numeric, errors="coerce").fillna(0.0)
-
-    return df
-
-# -------------------------
-# LSTM scoring helpers
-# -------------------------
-seq_buffer = deque(maxlen=2 * TIMESTEPS)  # rolling scaled feature rows for LSTM
-
-def align_seq_scores_to_rows(seq_scores, n_rows, timesteps):
-    """Map each sequence score (length n_rows - timesteps + 1) to the index where sequence ends.
-       Returns array length n_rows with np.nan first (timesteps-1) entries, then seq_scores."""
-    out = np.full(shape=(n_rows,), fill_value=np.nan)
-    if seq_scores is None or len(seq_scores) == 0:
-        return out
-    start_idx = timesteps - 1
-    out[start_idx:start_idx + len(seq_scores)] = seq_scores
-    return out
-
-def score_lstm_rows(lstm_model, lstm_thr, batch_scaled):
-    """
-    Use seq_buffer + batch_scaled to compute per-row binary (0 owner / 1 intruder).
-    """
-    n = batch_scaled.shape[0]
-    preds = np.zeros(shape=(n,), dtype=int)
-
-    # extend the buffer with batch rows
-    for row in batch_scaled:
-        seq_buffer.append(row)
-
-    if lstm_model is None or lstm_thr is None:
-        return preds, np.full(n, np.nan)
-
-    seqs = []
-    # build all sequences that end at each new row in this batch
-    for i in range(n):
-        if len(seq_buffer) >= TIMESTEPS:
-            # last TIMESTEPS in buffer correspond to sequence ending at current new row
-            seq = np.array(list(seq_buffer)[-TIMESTEPS:])
-            seqs.append(seq)
-        else:
-            seqs.append(None)
-
-    seqs_valid = np.array([s for s in seqs if s is not None])
-    if len(seqs_valid) == 0:
-        return preds, np.full(n, np.nan)
-
-    # predict in batches (reshape)
-    seqs_in = seqs_valid.reshape((len(seqs_valid), TIMESTEPS, seqs_valid.shape[2]))
-    seqs_out = lstm_model.predict(seqs_in, verbose=0)
-    seq_err = np.mean((seqs_in - seqs_out) ** 2, axis=(1, 2))
-
-    # map errors back into the per-row array
-    err_idx = 0
-    row_errs = np.full(n, np.nan)
-    for i, s in enumerate(seqs):
-        if s is not None:
-            e = seq_err[err_idx]
-            row_errs[i] = e
-            preds[i] = 1 if e > float(lstm_thr) else 0
-            err_idx += 1
-        else:
-            row_errs[i] = np.nan
-            preds[i] = 0  # treat early rows as owner
-
-    return preds, row_errs
-
-# -------------------------
-# Ensemble vote
-# -------------------------
-def ensemble_vote(df_batch, scaler, ocsvm, isof, lstm_model, lstm_thr, feature_order):
-    # prepare features (aligned + numeric)
-    X = prepare_features(df_batch, feature_order)
-    if X.empty:
-        # return zeros and nans
-        out = pd.DataFrame(index=df_batch.index)
-        out["OneClassSVM"] = 0
-        out["IsolationForest"] = 0
-        out["LSTM_AE"] = 0
-        out["LSTM_Error"] = np.nan
-        out["VotesAvailable"] = 0
-        out["IntruderVotes"] = 0
-        out["EnsemblePrediction"] = 0
-        return out
-
-    # scale
-    X_scaled = scaler.transform(X.values)
-
-    out = pd.DataFrame(index=df_batch.index)
-
-    # ocsvm, iso predictions (1 = intruder)
-    if ocsvm is not None:
-        oc_pred = ocsvm.predict(X_scaled)  # +1 inlier, -1 outlier
-        out["OneClassSVM"] = (oc_pred == -1).astype(int)
-    else:
-        out["OneClassSVM"] = 0
-
-    if isof is not None:
-        iso_pred = isof.predict(X_scaled)
-        out["IsolationForest"] = (iso_pred == -1).astype(int)
-    else:
-        out["IsolationForest"] = 0
-
-    # LSTM
-    lstm_preds, lstm_errs = score_lstm_rows(lstm_model, lstm_thr, X_scaled)
-    out["LSTM_AE"] = lstm_preds
-    out["LSTM_Error"] = lstm_errs
-
-    # votes
-    out["VotesAvailable"] = (~out[["OneClassSVM", "IsolationForest", "LSTM_AE"]].isna()).sum(axis=1)
-    out["IntruderVotes"] = out[["OneClassSVM", "IsolationForest", "LSTM_AE"]].sum(axis=1)
-    out["EnsemblePrediction"] = (out["IntruderVotes"] >= VOTE_THRES).astype(int)
-
-    return out
-
-# -------------------------
-# Retrain models from owner buffer (safe)
-# -------------------------
-def retrain_models_from_df(owner_df, feature_order_target=None):
-    """
-    Train scaler, OCSVM, IsolationForest, LSTM-AE from owner_df.
-    owner_df: DataFrame containing feature columns (may include extra columns).
-    Returns: dict(paths) or raises exception.
-    """
-    print("🔁 Retraining models on accepted owner buffer (size=%d) ..." % len(owner_df))
-    df = owner_df.copy()
-    # drop meta
-    df = df.drop(columns=[c for c in ["Label", "Timestamp"] if c in df.columns], errors="ignore")
-    # prefer feature_order_target to select columns
-    if feature_order_target:
-        for c in feature_order_target:
-            if c not in df.columns:
-                df[c] = 0.0
-        df = df[feature_order_target]
-    else:
-        # infer numeric columns
-        df = df.select_dtypes(include=[np.number])
-
-    # clean
-    df = df.fillna(df.mean(numeric_only=True))
-    df = df.replace([np.inf, -np.inf], np.nan).dropna()
-    if df.empty:
-        raise RuntimeError("No numeric data to retrain on after cleaning.")
-
-    # fit scaler
-    scaler = StandardScaler()
-    X = scaler.fit_transform(df.values)
-
-    # One-class models
-    ocsvm = OneClassSVM(kernel="rbf", gamma="scale", nu=0.05)
-    ocsvm.fit(X)
-    isof = IsolationForest(contamination=0.05, random_state=42)
-    isof.fit(X)
-
-    # LSTM training (only if enough rows)
-    if len(X) > TIMESTEPS:
-        X_seq = np.array([X[i:i + TIMESTEPS] for i in range(len(X) - TIMESTEPS)])
-        n_features = X.shape[1]
-        ae = build_lstm_autoencoder(TIMESTEPS, n_features)
-        ae.fit(X_seq, X_seq, epochs=15, batch_size=64, validation_split=0.1, verbose=0)
-        X_pred = ae.predict(X_seq, verbose=0)
-        train_err = np.mean((X_seq - X_pred) ** 2, axis=(1, 2))
-        thr = float(np.percentile(train_err, 95))
-        # save LSTM
-        os.makedirs(MODELS_DIR, exist_ok=True)
-        ae.save(LSTM_MODEL_PATH)
-        joblib.dump(thr, LSTM_THR_PATH)
-        print("  - LSTM retrained, thr=", thr)
-    else:
-        # remove old LSTM if exists? keep existing
-        ae = None
-        thr = None
-        print("  - Not enough rows for LSTM retrain (need > TIMESTEPS)")
-
-    # persist scaler & models
-    joblib.dump(scaler, SCALER_PATH)
-    joblib.dump(ocsvm, OCSVM_PATH)
-    joblib.dump(isof, ISO_PATH)
-
-    # persist feature order
-    feature_names = df.columns.tolist()
-    joblib.dump(feature_names, FEATURE_NAMES_PATH)
-
-    print("✅ Retrain complete and saved to models/")
-
+def load_state():
+    """Loads the state from the JSON file, or creates a default one."""
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
+    # Default state for the very first run
     return {
-        "scaler": SCALER_PATH,
-        "ocsvm": OCSVM_PATH,
-        "isof": ISO_PATH,
-        "lstm": LSTM_MODEL_PATH if ae is not None else None,
-        "lstm_thr": LSTM_THR_PATH if thr is not None else None,
-        "feature_names": FEATURE_NAMES_PATH
+        "last_processed_row": 0,
+        "model_version": 1,
+        "confidence_score": 1.0,
+        "trusted_buffer_size": 0
     }
 
-# -------------------------
-# Main monitor loop
-# -------------------------
-def on_intrusion_detected(window_df: pd.DataFrame):
-    # Reactive policy: here is where you implement lock-screen, notifications, etc.
-    print("🚨 INTRUSION ACTION: rows", list(window_df.index)[-CONSEC_K:])
-    # Example stub: write to a log file
-    log_path = os.path.join(BASE_DIR, "data", "intrusion_log.txt")
-    with open(log_path, "a") as f:
-        f.write(f"{datetime.now().isoformat()} - Intrusion detected - rows {list(window_df.index)[-CONSEC_K:]}\n")
+def save_state(state):
+    """Saves the current state to the JSON file."""
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=4)
+    print(f"DEBUG: State saved. (Processed rows: {state['last_processed_row']})")
 
-def monitor_loop():
-    # load models and state
-    os.makedirs(MODELS_DIR, exist_ok=True)
-    # offset for persistence
-    last_row = load_offset()
-    # owner buffer stores accepted owner rows (DataFrame)
-    owner_buffer = pd.DataFrame()
-    accepted_since_retrain = 0
-    in_intrusion_mode = False
-    forgive_remaining = 0
-    consec_flags = 0
+# ------------------------------------------------------------------
+# Data Processing and Prediction Functions
+# ------------------------------------------------------------------
 
-    # load model artifacts (if present)
-    scaler = safe_load(SCALER_PATH, joblib.load)
-    ocsvm = safe_load(OCSVM_PATH, joblib.load)
-    isof = safe_load(ISO_PATH, joblib.load)
-    lstm_model = None
-    lstm_thr = None
-    try:
-        if os.path.exists(LSTM_MODEL_PATH) and os.path.exists(LSTM_THR_PATH):
-            lstm_model = load_model(LSTM_MODEL_PATH)
-            lstm_thr = joblib.load(LSTM_THR_PATH)
-    except Exception:
-        lstm_model, lstm_thr = None, None
+def preprocess_event(event, models):
+    """Preprocesses a single event dictionary for prediction."""
+    feature_names = models.get("feature_names")
+    if not feature_names:
+        raise ValueError("feature_names not found in loaded models.")
 
-    feature_order = load_feature_order()
+    x = np.array([event.get(f, np.nan) for f in feature_names], dtype=float).reshape(1, -1)
 
-    print("👀 Monitoring", DATA_CSV)
-    print(f"   Window={WINDOW_SIZE}, Retrain every {RETRAIN_AFTER} accepted rows, K={CONSEC_K}, Vote≥{VOTE_THRES}")
+    imputer_data = models.get("imputer", {})
+    imputer_map = imputer_data.get("imputer", {})
+    for i, f in enumerate(feature_names):
+        if np.isnan(x[0, i]):
+            x[0, i] = imputer_map.get(f, 0.0)
 
-    # If models missing but enough data exists, attempt an initial train using all existing cd_vector rows.
-    try:
-        if (scaler is None or ocsvm is None or isof is None) and os.path.exists(DATA_CSV):
-            df_all = pd.read_csv(DATA_CSV)
-            if len(df_all) > max(TIMESTEPS, 500):  # heuristic: need some data
-                print("⚠️ Models missing; doing initial train on existing data...")
-                retrain_models_from_df(df_all.tail(WINDOW_SIZE), feature_order_target=None)
-                scaler = joblib.load(SCALER_PATH)
-                ocsvm = joblib.load(OCSVM_PATH)
-                isof = joblib.load(ISO_PATH)
-                if os.path.exists(LSTM_MODEL_PATH) and os.path.exists(LSTM_THR_PATH):
-                    lstm_model = load_model(LSTM_MODEL_PATH)
-                    lstm_thr = joblib.load(LSTM_THR_PATH)
-                feature_order = load_feature_order()
+    scaler = models.get("scaler")
+    if scaler is not None:
+        x = scaler.transform(x)
 
-    except Exception as e:
-        print("Error during initial model check:", e, traceback.format_exc())
+    return x
 
-    # main polling loop
+def run_models(x, models, buffer):
+    """Runs all loaded models on a preprocessed data point."""
+    results = {}
+    
+    # Traditional models predict on the latest event
+    for name in ["isolation_forest", "lof", "elliptic_envelope", "oneclass_svm", "rf_model"]:
+        model = models.get(name)
+        if model is not None:
+            results[name] = int(model.predict(x)[0])
+
+    # LSTM Autoencoder logic
+    lstm = models.get("lstm_autoencoder")
+    threshold = models.get("lstm_threshold", 0.01)
+    
+    if lstm is not None and len(buffer) == 10:
+        try:
+            x_seq = np.array(list(buffer)).reshape(1, 10, -1)
+            recon = lstm.predict(x_seq, verbose=0)
+            loss = np.mean(np.square(x_seq - recon))
+            results["lstm_autoencoder"] = int(loss > threshold)
+            results["lstm_loss"] = float(loss)
+        except Exception as e:
+            results["lstm_autoencoder"] = f"error: {e}"
+    else:
+        results["lstm_autoencoder"] = "pending_buffer"
+
+    return results
+
+# ------------------------------------------------------------------
+# Main Monitoring Loop
+# ------------------------------------------------------------------
+
+def main():
+    """Main function to run the continuous monitoring loop."""
+    # --- Initialization ---
+    print("🚀 Initializing CUA Monitor...")
+    models = load_models(MODEL_DIR)
+    feature_names = models.get("feature_names", [])
+    if not feature_names:
+        print("[ERROR] No feature_names found in models. Exiting.")
+        return
+        
+    # --- RCM and Adaptive Learning Parameters ---
+    LAMBDA = 0.90 # Made slightly more responsive
+    LOCKOUT_THRESHOLD = 0.60
+    TRUSTED_THRESHOLD = 0.90
+    RETRAIN_BUFFER_SIZE = 200
+
+    # --- Weighted Voting Parameters ---
+    MODEL_WEIGHTS = {
+        "lstm_autoencoder": 3,
+        "isolation_forest": 2,
+        "oneclass_svm": 2,
+        "lof": 1,
+        "elliptic_envelope": 1,
+        "rf_model": 1
+    }
+    ANOMALY_THRESHOLD = 3 # Tweak this to adjust sensitivity
+
+    # --- Buffers ---
+    history_buffer = deque(maxlen=10)
+    trusted_data_buffer = []
+    
+    print("✅ Initialization complete. Starting monitoring loop...")
+
+    # --- Main Loop ---
     while True:
         try:
-            if not os.path.exists(DATA_CSV) or os.path.getsize(DATA_CSV) == 0:
-                time.sleep(POLL_SEC)
+            state = load_state()
+            confidence_score = state["confidence_score"]
+            
+            new_data_df = pd.read_csv(
+                CD_VECTOR_FILE, 
+                skiprows=range(1, state["last_processed_row"] + 1)
+            )
+            
+            if new_data_df.empty:
+                print("No new activity detected. Waiting...")
+                time.sleep(5)
                 continue
 
-            df = pd.read_csv(DATA_CSV)
-            if df.empty:
-                time.sleep(POLL_SEC)
-                continue
+            print(f"DEBUG: Found {len(new_data_df)} new activity rows to process.")
 
-            total_rows = len(df)
-            if last_row >= total_rows:
-                time.sleep(POLL_SEC)
-                continue
+            for index, row in new_data_df.iterrows():
+                absolute_row_index = state['last_processed_row'] + index + 1
+                event = row.to_dict()
+                x = preprocess_event(event, models)
+                history_buffer.append(x[0])
+                results = run_models(x, models, history_buffer)
 
-            # new rows to process
-            new = df.iloc[last_row:total_rows].reset_index(drop=True)
-            if new.empty:
-                last_row = total_rows
-                save_offset(last_row)
-                time.sleep(POLL_SEC)
-                continue
+                # --- RCM Logic (Balanced & Weighted Version) ---
+                anomaly_weight = 0
+                vote_details = {}
 
-            # score batch
-            if scaler is None:
-                print("⚠️ No scaler available — marking rows as owner until scaler exists.")
-                votes = pd.DataFrame(index=new.index)
-                votes["EnsemblePrediction"] = 0
-                votes["IntruderVotes"] = 0
-            else:
-                votes = ensemble_vote(new, scaler, ocsvm, isof, lstm_model, lstm_thr, feature_order)
+                for model_name, prediction in results.items():
+                    if not isinstance(prediction, int):
+                        continue
+                    
+                    is_anomaly_vote = False
+                    if model_name == "lstm_autoencoder" and prediction == 1:
+                        is_anomaly_vote = True
+                    elif model_name != "lstm_autoencoder" and prediction == -1:
+                        is_anomaly_vote = True
 
-            # per-row policy
-            for idx_local in range(len(new)):
-                row_votes = int(votes["EnsemblePrediction"].iat[idx_local])
-                intr_votes = int(votes["IntruderVotes"].iat[idx_local]) if "IntruderVotes" in votes.columns else 0
+                    vote_details[model_name] = prediction
+                    if is_anomaly_vote:
+                        anomaly_weight += MODEL_WEIGHTS.get(model_name, 1)
 
-                # If currently in forgiveness/adaptation after intrusion
-                if in_intrusion_mode and forgive_remaining > 0:
-                    # accept row if not strongly anomalous (e.g., intruder votes < VOTE_THRES)
-                    accept_row = intr_votes < VOTE_THRES
-                    forgive_remaining -= 1
-                    if accept_row:
-                        # append to owner buffer
-                        row_df = new.iloc[[idx_local]]
-                        owner_buffer = pd.concat([owner_buffer, row_df], ignore_index=True)
-                        accepted_since_retrain += 1
-                    else:
-                        # still intruder; do not accept
-                        pass
+                is_anomaly = anomaly_weight >= ANOMALY_THRESHOLD
+                p_t = 0.0 if is_anomaly else 1.0
+                confidence_score = (LAMBDA * confidence_score) + ((1 - LAMBDA) * p_t)
 
-                else:
-                    # normal mode: accept only rows flagged as owner (ensemble=0)
-                    if row_votes == 0:
-                        row_df = new.iloc[[idx_local]]
-                        owner_buffer = pd.concat([owner_buffer, row_df], ignore_index=True)
-                        accepted_since_retrain += 1
-                        consec_flags = 0
-                    else:
-                        consec_flags += 1
-                        # if consecutive flagged, trigger intrusion action
-                        if consec_flags >= CONSEC_K:
-                            # intrusion detected: handle it, enable forgiveness mode
-                            start_idx = last_row + idx_local - CONSEC_K + 1
-                            end_idx = last_row + idx_local
-                            window = df.iloc[max(0, start_idx):end_idx + 1]
-                            on_intrusion_detected(window)
-                            in_intrusion_mode = True
-                            forgive_remaining = FORGIVE_ROWS
-                            consec_flags = 0
-                            # do not accept these anomaly rows into owner buffer
-                            # continue to next rows
+                # Enhanced Debugging Print
+                vote_str = (
+                    f'IF:{vote_details.get("isolation_forest", "N/A")} '
+                    f'SVM:{vote_details.get("oneclass_svm", "N/A")} '
+                    f'LOF:{vote_details.get("lof", "N/A")} '
+                    f'EE:{vote_details.get("elliptic_envelope", "N/A")} '
+                    f'LSTM:{vote_details.get("lstm_autoencoder", "N/A")} '
+                    f'RF:{vote_details.get("rf_model", "N/A")}'
+                )
+                print(
+                    f"Row {absolute_row_index}: "
+                    f"Confidence = {confidence_score:.2f} | "
+                    f"Anomaly = {is_anomaly} | "
+                    f"Weight: {anomaly_weight}/{ANOMALY_THRESHOLD} | "
+                    f"Votes: [{vote_str}]"
+                )
 
-                # maintain sliding window size
-                if len(owner_buffer) > WINDOW_SIZE:
-                    owner_buffer = owner_buffer.tail(WINDOW_SIZE).reset_index(drop=True)
+                # Lockout and Buffer Logic
+                if confidence_score < LOCKOUT_THRESHOLD:
+                    print(f"🚨 ALERT: Intruder detected at row {absolute_row_index}! Confidence dropped to {confidence_score:.2f}.")
+                    trusted_data_buffer.clear()
+                elif confidence_score > TRUSTED_THRESHOLD:
+                    trusted_data_buffer.append(row.to_dict())
 
-            # Retrain if enough accepted rows accumulated
-            if accepted_since_retrain >= RETRAIN_AFTER and len(owner_buffer) >= TIMESTEPS + 10:
-                # check poisoning: what fraction of recent owner_buffer rows are anomaly by current models?
-                try:
-                    # prepare last N rows
-                    recent = owner_buffer.tail(min(len(owner_buffer), WINDOW_SIZE))
-                    prep = prepare_features(recent, feature_order)
-                    X_scaled = joblib.load(SCALER_PATH).transform(prep.values) if os.path.exists(SCALER_PATH) else None
-                    if X_scaled is not None:
-                        # use ocsvm/isof if present
-                        bad = 0
-                        total_check = X_scaled.shape[0]
-                        if ocsvm is not None:
-                            bad += (ocsvm.predict(X_scaled) == -1).sum()
-                        if isof is not None:
-                            bad += (isof.predict(X_scaled) == -1).sum()
-                        # rough anomaly rate (double counting possible) -> normalize
-                        poison_rate = (bad / (2 * total_check)) if total_check > 0 else 0.0
-                    else:
-                        poison_rate = 0.0
-                except Exception:
-                    poison_rate = 1.0
+            # Update and save state after processing the batch
+            state["last_processed_row"] += len(new_data_df)
+            state["confidence_score"] = confidence_score
+            state["trusted_buffer_size"] = len(trusted_data_buffer)
+            save_state(state)
 
-                if poison_rate <= MAX_POISON_RATE:
-                    try:
-                        retrain_models_from_df(owner_buffer.tail(WINDOW_SIZE), feature_order_target=feature_order)
-                        # reload models and scaler
-                        scaler = joblib.load(SCALER_PATH)
-                        ocsvm = joblib.load(OCSVM_PATH)
-                        isof = joblib.load(ISO_PATH)
-                        if os.path.exists(LSTM_MODEL_PATH) and os.path.exists(LSTM_THR_PATH):
-                            lstm_model = load_model(LSTM_MODEL_PATH)
-                            lstm_thr = joblib.load(LSTM_THR_PATH)
-                        # reset counter
-                        accepted_since_retrain = 0
-                        in_intrusion_mode = False
-                        print("🔁 Retrain triggered and completed.")
-                    except Exception as e:
-                        print("⚠️ Retrain failed:", e)
-                else:
-                    print(f"⚠️ Skipping retrain due to high poison rate ({poison_rate:.2f})")
-                    # reset accepted counter to avoid immediate repeat
-                    accepted_since_retrain = 0
-
-            # persist last_row
-            last_row = total_rows
-            save_offset(last_row)
-
-        except KeyboardInterrupt:
-            print("Monitor stopped by user.")
-            break
+            # Check for retraining
+            if len(trusted_data_buffer) >= RETRAIN_BUFFER_SIZE:
+                print("🚀 ADAPTIVE TRAINING: Buffer full. Triggering model retraining...")
+                # Placeholder for retraining logic
+                trusted_data_buffer.clear()
+                
+        except FileNotFoundError:
+            print(f"ERROR: Cannot find {CD_VECTOR_FILE}. Make sure the capture service is running.")
+            time.sleep(10)
         except Exception as e:
-            print("Monitor error:", e)
-            traceback.print_exc()
+            print(f"An unexpected error occurred: {e}")
+            time.sleep(10)
 
-        time.sleep(POLL_SEC)
-
-# -------------------------
-# Entry point
-# -------------------------
 if __name__ == "__main__":
-    monitor_loop()
+    main()

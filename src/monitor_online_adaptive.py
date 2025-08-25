@@ -209,17 +209,15 @@ def load_models(model_dir):
     return models
 
 def load_state():
-    """Loads the state from the JSON file, or creates a default one."""
+    """Loads the state from the JSON file. Exits if not found."""
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r") as f:
             return json.load(f)
-    # Default state for the very first run
-    return {
-        "last_processed_row": 0,
-        "model_version": 1,
-        "confidence_score": 1.0,
-        "trusted_buffer_size": 0
-    }
+    else:
+        # If the state file doesn't exist, we cannot proceed.
+        print("[ERROR] The state file 'cua_state.json' was not found.")
+        print("Please run train_models.py first to train the initial models and create the state file.")
+        exit() # Exit the script
 
 def save_state(state):
     """Saves the current state to the JSON file."""

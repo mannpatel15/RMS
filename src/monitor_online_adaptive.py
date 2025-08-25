@@ -165,6 +165,248 @@
 
 
 
+# import os
+# import json
+# import time
+# import pickle
+# import joblib
+# import numpy as np
+# import pandas as pd
+# import tensorflow.keras as keras
+# from collections import deque
+
+# # --- Constants and File Paths ---
+# STATE_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "cua_state.json"))
+# CD_VECTOR_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "cd_vector.csv"))
+# MODEL_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models"))
+
+# # ------------------------------------------------------------------
+# # Model and State Loading Functions
+# # ------------------------------------------------------------------
+
+# def load_models(model_dir):
+#     """Loads all model artifacts from the specified directory."""
+#     models = {}
+#     print(f"DEBUG: Loading models from {model_dir}")
+#     for fname in os.listdir(model_dir):
+#         fpath = os.path.join(model_dir, fname)
+#         key = fname.split(".")[0]
+
+#         try:
+#             if fname.endswith(".pkl"):
+#                 models[key] = joblib.load(fpath)
+#             elif fname.endswith(".json"):
+#                 with open(fpath, "r") as f:
+#                     models[key] = json.load(f)
+#             elif fname.endswith(".npy"):
+#                 models[key] = np.load(fpath, allow_pickle=True)
+#             elif fname.endswith(".keras"):
+#                 models[key] = keras.models.load_model(fpath)
+#         except Exception as e:
+#             print(f"[WARN] Could not load {fname}: {e}")
+
+#     print("[INFO] Models loaded:", list(models.keys()))
+#     return models
+
+# def load_state():
+#     """Loads the state from the JSON file. Exits if not found."""
+#     if os.path.exists(STATE_FILE):
+#         with open(STATE_FILE, "r") as f:
+#             return json.load(f)
+#     else:
+#         # If the state file doesn't exist, we cannot proceed.
+#         print("[ERROR] The state file 'cua_state.json' was not found.")
+#         print("Please run train_models.py first to train the initial models and create the state file.")
+#         exit() # Exit the script
+
+# def save_state(state):
+#     """Saves the current state to the JSON file."""
+#     with open(STATE_FILE, "w") as f:
+#         json.dump(state, f, indent=4)
+#     print(f"DEBUG: State saved. (Processed rows: {state['last_processed_row']})")
+
+# # ------------------------------------------------------------------
+# # Data Processing and Prediction Functions
+# # ------------------------------------------------------------------
+
+# def preprocess_event(event, models):
+#     """Preprocesses a single event dictionary for prediction."""
+#     feature_names = models.get("feature_names")
+#     if not feature_names:
+#         raise ValueError("feature_names not found in loaded models.")
+
+#     x = np.array([event.get(f, np.nan) for f in feature_names], dtype=float).reshape(1, -1)
+
+#     imputer_data = models.get("imputer", {})
+#     imputer_map = imputer_data.get("imputer", {})
+#     for i, f in enumerate(feature_names):
+#         if np.isnan(x[0, i]):
+#             x[0, i] = imputer_map.get(f, 0.0)
+
+#     scaler = models.get("scaler")
+#     if scaler is not None:
+#         x = scaler.transform(x)
+
+#     return x
+
+# def run_models(x, models, buffer):
+#     """Runs all loaded models on a preprocessed data point."""
+#     results = {}
+    
+#     # Traditional models predict on the latest event
+#     for name in ["isolation_forest", "lof", "elliptic_envelope", "oneclass_svm", "rf_model"]:
+#         model = models.get(name)
+#         if model is not None:
+#             results[name] = int(model.predict(x)[0])
+
+#     # LSTM Autoencoder logic
+#     lstm = models.get("lstm_autoencoder")
+#     threshold = models.get("lstm_threshold", 0.01)
+    
+#     if lstm is not None and len(buffer) == 10:
+#         try:
+#             x_seq = np.array(list(buffer)).reshape(1, 10, -1)
+#             recon = lstm.predict(x_seq, verbose=0)
+#             loss = np.mean(np.square(x_seq - recon))
+#             results["lstm_autoencoder"] = int(loss > threshold)
+#             results["lstm_loss"] = float(loss)
+#         except Exception as e:
+#             results["lstm_autoencoder"] = f"error: {e}"
+#     else:
+#         results["lstm_autoencoder"] = "pending_buffer"
+
+#     return results
+
+# # ------------------------------------------------------------------
+# # Main Monitoring Loop
+# # ------------------------------------------------------------------
+
+# def main():
+#     """Main function to run the continuous monitoring loop."""
+#     # --- Initialization ---
+#     print("🚀 Initializing CUA Monitor...")
+#     models = load_models(MODEL_DIR)
+#     feature_names = models.get("feature_names", [])
+#     if not feature_names:
+#         print("[ERROR] No feature_names found in models. Exiting.")
+#         return
+        
+#     # --- RCM and Adaptive Learning Parameters ---
+#     LAMBDA = 0.90 # Made slightly more responsive
+#     LOCKOUT_THRESHOLD = 0.60
+#     TRUSTED_THRESHOLD = 0.90
+#     RETRAIN_BUFFER_SIZE = 200
+
+#     # --- Weighted Voting Parameters ---
+#     MODEL_WEIGHTS = {
+#         "lstm_autoencoder": 3,
+#         "isolation_forest": 2,
+#         "oneclass_svm": 2,
+#         "lof": 1,
+#         "elliptic_envelope": 1,
+#         "rf_model": 1
+#     }
+#     ANOMALY_THRESHOLD = 3 # Tweak this to adjust sensitivity
+
+#     # --- Buffers ---
+#     history_buffer = deque(maxlen=10)
+#     trusted_data_buffer = []
+    
+#     print("✅ Initialization complete. Starting monitoring loop...")
+
+#     # --- Main Loop ---
+#     while True:
+#         try:
+#             state = load_state()
+#             confidence_score = state["confidence_score"]
+            
+#             new_data_df = pd.read_csv(
+#                 CD_VECTOR_FILE, 
+#                 skiprows=range(1, state["last_processed_row"] + 1)
+#             )
+            
+#             if new_data_df.empty:
+#                 print("No new activity detected. Waiting...")
+#                 time.sleep(5)
+#                 continue
+
+#             print(f"DEBUG: Found {len(new_data_df)} new activity rows to process.")
+
+#             for index, row in new_data_df.iterrows():
+#                 absolute_row_index = state['last_processed_row'] + index + 1
+#                 event = row.to_dict()
+#                 x = preprocess_event(event, models)
+#                 history_buffer.append(x[0])
+#                 results = run_models(x, models, history_buffer)
+
+#                 # --- RCM Logic (Balanced & Weighted Version) ---
+#                 anomaly_weight = 0
+#                 vote_details = {}
+
+#                 for model_name, prediction in results.items():
+#                     if not isinstance(prediction, int):
+#                         continue
+                    
+#                     is_anomaly_vote = False
+#                     if model_name == "lstm_autoencoder" and prediction == 1:
+#                         is_anomaly_vote = True
+#                     elif model_name != "lstm_autoencoder" and prediction == -1:
+#                         is_anomaly_vote = True
+
+#                     vote_details[model_name] = prediction
+#                     if is_anomaly_vote:
+#                         anomaly_weight += MODEL_WEIGHTS.get(model_name, 1)
+
+#                 is_anomaly = anomaly_weight >= ANOMALY_THRESHOLD
+#                 p_t = 0.0 if is_anomaly else 1.0
+#                 confidence_score = (LAMBDA * confidence_score) + ((1 - LAMBDA) * p_t)
+
+#                 # Enhanced Debugging Print
+#                 vote_str = (
+#                     f'IF:{vote_details.get("isolation_forest", "N/A")} '
+#                     f'SVM:{vote_details.get("oneclass_svm", "N/A")} '
+#                     f'LOF:{vote_details.get("lof", "N/A")} '
+#                     f'EE:{vote_details.get("elliptic_envelope", "N/A")} '
+#                     f'LSTM:{vote_details.get("lstm_autoencoder", "N/A")} '
+#                     f'RF:{vote_details.get("rf_model", "N/A")}'
+#                 )
+#                 print(
+#                     f"Row {absolute_row_index}: "
+#                     f"Confidence = {confidence_score:.2f} | "
+#                     f"Anomaly = {is_anomaly} | "
+#                     f"Weight: {anomaly_weight}/{ANOMALY_THRESHOLD} | "
+#                     f"Votes: [{vote_str}]"
+#                 )
+
+#                 # Lockout and Buffer Logic
+#                 if confidence_score < LOCKOUT_THRESHOLD:
+#                     print(f"🚨 ALERT: Intruder detected at row {absolute_row_index}! Confidence dropped to {confidence_score:.2f}.")
+#                     trusted_data_buffer.clear()
+#                 elif confidence_score > TRUSTED_THRESHOLD:
+#                     trusted_data_buffer.append(row.to_dict())
+
+#             # Update and save state after processing the batch
+#             state["last_processed_row"] += len(new_data_df)
+#             state["confidence_score"] = confidence_score
+#             state["trusted_buffer_size"] = len(trusted_data_buffer)
+#             save_state(state)
+
+#             # Check for retraining
+#             if len(trusted_data_buffer) >= RETRAIN_BUFFER_SIZE:
+#                 print("🚀 ADAPTIVE TRAINING: Buffer full. Triggering model retraining...")
+#                 # Placeholder for retraining logic
+#                 trusted_data_buffer.clear()
+                
+#         except FileNotFoundError:
+#             print(f"ERROR: Cannot find {CD_VECTOR_FILE}. Make sure the capture service is running.")
+#             time.sleep(10)
+#         except Exception as e:
+#             print(f"An unexpected error occurred: {e}")
+#             time.sleep(10)
+
+# if __name__ == "__main__":
+#     main()
+
 import os
 import json
 import time
@@ -191,33 +433,30 @@ def load_models(model_dir):
     for fname in os.listdir(model_dir):
         fpath = os.path.join(model_dir, fname)
         key = fname.split(".")[0]
-
         try:
-            if fname.endswith(".pkl"):
-                models[key] = joblib.load(fpath)
+            if fname.endswith(".pkl"): models[key] = joblib.load(fpath)
             elif fname.endswith(".json"):
-                with open(fpath, "r") as f:
-                    models[key] = json.load(f)
-            elif fname.endswith(".npy"):
-                models[key] = np.load(fpath, allow_pickle=True)
-            elif fname.endswith(".keras"):
-                models[key] = keras.models.load_model(fpath)
+                with open(fpath, "r") as f: models[key] = json.load(f)
+            elif fname.endswith(".npy"): models[key] = np.load(fpath, allow_pickle=True)
+            elif fname.endswith(".keras"): models[key] = keras.models.load_model(fpath)
         except Exception as e:
             print(f"[WARN] Could not load {fname}: {e}")
-
     print("[INFO] Models loaded:", list(models.keys()))
     return models
 
+### MODIFIED: The state loader now ensures the strike counter key exists ###
 def load_state():
-    """Loads the state from the JSON file. Exits if not found."""
+    """Loads the state from the JSON file, ensuring all necessary keys exist."""
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r") as f:
-            return json.load(f)
+            state = json.load(f)
+            # Ensure the new key exists for backward compatibility
+            state.setdefault('anomaly_strike_counter', 0)
+            return state
     else:
-        # If the state file doesn't exist, we cannot proceed.
         print("[ERROR] The state file 'cua_state.json' was not found.")
-        print("Please run train_models.py first to train the initial models and create the state file.")
-        exit() # Exit the script
+        print("Please run train_models.py first to create the state file.")
+        exit()
 
 def save_state(state):
     """Saves the current state to the JSON file."""
@@ -232,49 +471,34 @@ def save_state(state):
 def preprocess_event(event, models):
     """Preprocesses a single event dictionary for prediction."""
     feature_names = models.get("feature_names")
-    if not feature_names:
-        raise ValueError("feature_names not found in loaded models.")
-
+    if not feature_names: raise ValueError("feature_names not found in loaded models.")
     x = np.array([event.get(f, np.nan) for f in feature_names], dtype=float).reshape(1, -1)
-
     imputer_data = models.get("imputer", {})
     imputer_map = imputer_data.get("imputer", {})
     for i, f in enumerate(feature_names):
-        if np.isnan(x[0, i]):
-            x[0, i] = imputer_map.get(f, 0.0)
-
+        if np.isnan(x[0, i]): x[0, i] = imputer_map.get(f, 0.0)
     scaler = models.get("scaler")
-    if scaler is not None:
-        x = scaler.transform(x)
-
+    if scaler is not None: x = scaler.transform(x)
     return x
 
 def run_models(x, models, buffer):
     """Runs all loaded models on a preprocessed data point."""
     results = {}
-    
-    # Traditional models predict on the latest event
     for name in ["isolation_forest", "lof", "elliptic_envelope", "oneclass_svm", "rf_model"]:
         model = models.get(name)
-        if model is not None:
-            results[name] = int(model.predict(x)[0])
-
-    # LSTM Autoencoder logic
+        if model is not None: results[name] = int(model.predict(x)[0])
     lstm = models.get("lstm_autoencoder")
     threshold = models.get("lstm_threshold", 0.01)
-    
     if lstm is not None and len(buffer) == 10:
         try:
             x_seq = np.array(list(buffer)).reshape(1, 10, -1)
             recon = lstm.predict(x_seq, verbose=0)
             loss = np.mean(np.square(x_seq - recon))
             results["lstm_autoencoder"] = int(loss > threshold)
-            results["lstm_loss"] = float(loss)
         except Exception as e:
             results["lstm_autoencoder"] = f"error: {e}"
     else:
         results["lstm_autoencoder"] = "pending_buffer"
-
     return results
 
 # ------------------------------------------------------------------
@@ -283,47 +507,39 @@ def run_models(x, models, buffer):
 
 def main():
     """Main function to run the continuous monitoring loop."""
-    # --- Initialization ---
     print("🚀 Initializing CUA Monitor...")
     models = load_models(MODEL_DIR)
-    feature_names = models.get("feature_names", [])
-    if not feature_names:
-        print("[ERROR] No feature_names found in models. Exiting.")
-        return
-        
+    
     # --- RCM and Adaptive Learning Parameters ---
-    LAMBDA = 0.90 # Made slightly more responsive
+    LAMBDA = 0.95 # Slower decay is fine because of the strike system
     LOCKOUT_THRESHOLD = 0.60
     TRUSTED_THRESHOLD = 0.90
     RETRAIN_BUFFER_SIZE = 200
 
     # --- Weighted Voting Parameters ---
     MODEL_WEIGHTS = {
-        "lstm_autoencoder": 3,
-        "isolation_forest": 2,
-        "oneclass_svm": 2,
-        "lof": 1,
-        "elliptic_envelope": 1,
-        "rf_model": 1
+        "lstm_autoencoder": 3, "isolation_forest": 2, "oneclass_svm": 2,
+        "lof": 1, "elliptic_envelope": 1, "rf_model": 1
     }
-    ANOMALY_THRESHOLD = 3 # Tweak this to adjust sensitivity
+    ANOMALY_THRESHOLD = 3 # Score needed to count as one "strike"
 
-    # --- Buffers ---
+    # --- ### NEW: "Three Strikes" System Parameters ### ---
+    STRIKE_THRESHOLD = 3 
+    STRIKE_PENALTY = 0.7 # Applies a 30% confidence reduction
+
     history_buffer = deque(maxlen=10)
     trusted_data_buffer = []
     
     print("✅ Initialization complete. Starting monitoring loop...")
 
-    # --- Main Loop ---
     while True:
         try:
             state = load_state()
             confidence_score = state["confidence_score"]
+            # ### NEW: Load the strike counter from the state ###
+            anomaly_strike_counter = state["anomaly_strike_counter"]
             
-            new_data_df = pd.read_csv(
-                CD_VECTOR_FILE, 
-                skiprows=range(1, state["last_processed_row"] + 1)
-            )
+            new_data_df = pd.read_csv(CD_VECTOR_FILE, skiprows=range(1, state["last_processed_row"] + 1))
             
             if new_data_df.empty:
                 print("No new activity detected. Waiting...")
@@ -339,62 +555,62 @@ def main():
                 history_buffer.append(x[0])
                 results = run_models(x, models, history_buffer)
 
-                # --- RCM Logic (Balanced & Weighted Version) ---
+                # --- Layer 1: Weighted Voting determines if this event is an anomaly ---
                 anomaly_weight = 0
-                vote_details = {}
-
                 for model_name, prediction in results.items():
-                    if not isinstance(prediction, int):
-                        continue
-                    
-                    is_anomaly_vote = False
-                    if model_name == "lstm_autoencoder" and prediction == 1:
-                        is_anomaly_vote = True
-                    elif model_name != "lstm_autoencoder" and prediction == -1:
-                        is_anomaly_vote = True
-
-                    vote_details[model_name] = prediction
+                    if not isinstance(prediction, int): continue
+                    is_anomaly_vote = (prediction == 1 if model_name == "lstm_autoencoder" else prediction == -1)
                     if is_anomaly_vote:
                         anomaly_weight += MODEL_WEIGHTS.get(model_name, 1)
-
+                
                 is_anomaly = anomaly_weight >= ANOMALY_THRESHOLD
+
+                # --- ### NEW: Layer 2: "Three Strikes" Logic tracks patterns ### ---
+                if is_anomaly:
+                    anomaly_strike_counter += 1
+                else:
+                    # Decay the strike counter if behavior is normal
+                    anomaly_strike_counter = max(0, anomaly_strike_counter - 1)
+                
+                # Apply the normal RCM decay
                 p_t = 0.0 if is_anomaly else 1.0
                 confidence_score = (LAMBDA * confidence_score) + ((1 - LAMBDA) * p_t)
 
-                # Enhanced Debugging Print
-                vote_str = (
-                    f'IF:{vote_details.get("isolation_forest", "N/A")} '
-                    f'SVM:{vote_details.get("oneclass_svm", "N/A")} '
-                    f'LOF:{vote_details.get("lof", "N/A")} '
-                    f'EE:{vote_details.get("elliptic_envelope", "N/A")} '
-                    f'LSTM:{vote_details.get("lstm_autoencoder", "N/A")} '
-                    f'RF:{vote_details.get("rf_model", "N/A")}'
-                )
+                # If strikes are high, apply the penalty
+                if anomaly_strike_counter >= STRIKE_THRESHOLD:
+                    print(f"🚨 STRIKE THRESHOLD MET! Applying penalty.")
+                    confidence_score *= STRIKE_PENALTY
+                    anomaly_strike_counter = 0 # Reset after penalty
+
+                # --- ### MODIFIED: Enhanced Debugging Print ### ---
                 print(
                     f"Row {absolute_row_index}: "
                     f"Confidence = {confidence_score:.2f} | "
-                    f"Anomaly = {is_anomaly} | "
                     f"Weight: {anomaly_weight}/{ANOMALY_THRESHOLD} | "
-                    f"Votes: [{vote_str}]"
+                    f"Strikes: {anomaly_strike_counter}/{STRIKE_THRESHOLD}"
                 )
 
-                # Lockout and Buffer Logic
+                # Lockout Logic
                 if confidence_score < LOCKOUT_THRESHOLD:
-                    print(f"🚨 ALERT: Intruder detected at row {absolute_row_index}! Confidence dropped to {confidence_score:.2f}.")
+                    print(f"🚨🚨 INTRUDER ALERT AT ROW {absolute_row_index}! Confidence dropped below threshold. Locking session.")
                     trusted_data_buffer.clear()
+                    # Simulate re-authentication by resetting the state
+                    state = {"last_processed_row": absolute_row_index, "model_version": state["model_version"],
+                             "confidence_score": 1.0, "trusted_buffer_size": 0, "anomaly_strike_counter": 0}
+                    break # Exit inner loop and start fresh after lockout
                 elif confidence_score > TRUSTED_THRESHOLD:
                     trusted_data_buffer.append(row.to_dict())
-
-            # Update and save state after processing the batch
+            
+            # Update the state with the new values
             state["last_processed_row"] += len(new_data_df)
             state["confidence_score"] = confidence_score
             state["trusted_buffer_size"] = len(trusted_data_buffer)
+            # ### NEW: Save the updated strike counter ###
+            state["anomaly_strike_counter"] = anomaly_strike_counter
             save_state(state)
 
-            # Check for retraining
             if len(trusted_data_buffer) >= RETRAIN_BUFFER_SIZE:
                 print("🚀 ADAPTIVE TRAINING: Buffer full. Triggering model retraining...")
-                # Placeholder for retraining logic
                 trusted_data_buffer.clear()
                 
         except FileNotFoundError:

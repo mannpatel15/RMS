@@ -1,0 +1,170 @@
+import os
+import sys
+import time
+import signal
+import pandas as pd
+from datetime import datetime
+from pynput import keyboard, mouse
+from dotenv import load_dotenv
+import threading
+
+# --- Setup and Configuration ---
+load_dotenv()
+base_dir = os.getenv('base_dir') or '.'
+DATA_DIR = os.path.join(base_dir, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+CD_VECTOR_CSV_PATH = os.path.join(DATA_DIR, "cd_vector.csv")
+AGGREGATION_INTERVAL = 5  # Aggregate data every 5 seconds
+ACTIVITY_THRESHOLD = 20  # Min combined events to save a vector
+
+HEADERS = [
+    "MeanHoldTime", "StdHoldTime", "MeanSpeed", "StdSpeed",
+    "MeanAcceleration", "StdAcceleration", "MeanClickDuration", "StdClickDuration",
+    "KeystrokeCount", "MouseMoveCount", "MouseClickCount", "Label", "Timestamp"
+]
+
+# --- In-Memory Buffers and Thread Lock ---
+# These lists will store raw event data in memory instead of in files.
+raw_keyboard_events = []
+raw_mouse_events = []
+# A thread lock is crucial to prevent race conditions when listeners and the main loop access the buffers.
+buffer_lock = threading.Lock()
+
+# --- Feature Extraction (Now In-Memory) ---
+def extract_keystroke_features(events):
+    df = pd.DataFrame(events)
+    if df.empty or 'event_type' not in df.columns:
+        return pd.DataFrame(columns=["HoldTime"])
+        
+    features = []
+    press_time = None
+    for _, row in df.iterrows():
+        if row["event_type"] == "press":
+            press_time = row["timestamp"]
+        elif row["event_type"] == "release" and press_time is not None:
+            features.append({"HoldTime": row["timestamp"] - press_time})
+            press_time = None
+    return pd.DataFrame(features)
+
+def extract_mouse_features(events):
+    df = pd.DataFrame(events)
+    if df.empty or 'event_type' not in df.columns:
+        return pd.DataFrame(columns=["Speed", "Acceleration"]), pd.DataFrame(columns=["ClickDuration"])
+
+    move_features, click_features = [], []
+    prev = {"x": None, "y": None, "t": None, "speed": None}
+    click_start = None
+    for _, row in df.iterrows():
+        event, t = row["event_type"], row["timestamp"]
+        if event == "move":
+            x, y = row["x"], row["y"]
+            if prev["x"] is not None:
+                dist = ((x - prev["x"])**2 + (y - prev["y"])**2)**0.5
+                dt = t - prev["t"] + 1e-6
+                speed = dist / dt
+                acc = (speed - prev["speed"]) / dt if prev["speed"] is not None else 0
+                move_features.append({"Speed": speed, "Acceleration": acc})
+                prev["speed"] = speed
+            prev.update({"x": x, "y": y, "t": t})
+        elif event == "press":
+            click_start = t
+        elif event == "release" and click_start is not None:
+            click_features.append({"ClickDuration": t - click_start})
+            click_start = None
+    return pd.DataFrame(move_features), pd.DataFrame(click_features)
+
+def generate_cd_vector(keystrokes_df, mouse_move_df, mouse_click_df, label):
+    """Generates the final aggregated feature vector."""
+    cd_vector = {
+        "MeanHoldTime": keystrokes_df["HoldTime"].mean(),
+        "StdHoldTime": keystrokes_df["HoldTime"].std(),
+        "MeanSpeed": mouse_move_df["Speed"].mean(),
+        "StdSpeed": mouse_move_df["Speed"].std(),
+        "MeanAcceleration": mouse_move_df["Acceleration"].mean(),
+        "StdAcceleration": mouse_move_df["Acceleration"].std(),
+        "MeanClickDuration": mouse_click_df["ClickDuration"].mean(),
+        "StdClickDuration": mouse_click_df["ClickDuration"].std(),
+        "KeystrokeCount": len(keystrokes_df),
+        "MouseMoveCount": len(mouse_move_df),
+        "MouseClickCount": len(mouse_click_df),
+        "Label": label
+    }
+    return pd.DataFrame([cd_vector])
+
+# --- Pynput Event Handlers (Now Writing to In-Memory Buffers) ---
+def on_press(key):
+    with buffer_lock:
+        raw_keyboard_events.append({"event_type": "press", "timestamp": time.time()})
+
+def on_release(key):
+    with buffer_lock:
+        raw_keyboard_events.append({"event_type": "release", "timestamp": time.time()})
+
+def on_move(x, y):
+    with buffer_lock:
+        raw_mouse_events.append({"event_type": "move", "x": x, "y": y, "timestamp": time.time()})
+
+def on_click(x, y, button, pressed):
+    with buffer_lock:
+        event = "press" if pressed else "release"
+        raw_mouse_events.append({"event_type": event, "x": x, "y": y, "timestamp": time.time()})
+
+# --- Main Service Logic ---
+def main():
+    print("🚀 Starting Unified CUA Capture Service (In-Memory)...")
+    
+    # Initialize CSV with headers if it's missing or empty
+    if not os.path.isfile(CD_VECTOR_CSV_PATH) or os.path.getsize(CD_VECTOR_CSV_PATH) == 0:
+        pd.DataFrame(columns=HEADERS).to_csv(CD_VECTOR_CSV_PATH, index=False)
+        print("✅ cd_vector.csv initialized.")
+
+    # Start the pynput listeners in the background
+    kb_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+    ms_listener = mouse.Listener(on_move=on_move, on_click=on_click)
+    kb_listener.start()
+    ms_listener.start()
+
+    print("🔴 Service is running. Capturing data...")
+    
+    def shutdown(signum, frame):
+        print("\n shutting down listeners...")
+        kb_listener.stop()
+        ms_listener.stop()
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
+
+    while True:
+        time.sleep(AGGREGATION_INTERVAL)
+        
+        # Atomically get and clear the buffers
+        with buffer_lock:
+            kb_events_batch = list(raw_keyboard_events)
+            ms_events_batch = list(raw_mouse_events)
+            raw_keyboard_events.clear()
+            raw_mouse_events.clear()
+
+        if not kb_events_batch and not ms_events_batch:
+            print("⏳ No new activity in this interval.")
+            continue
+
+        # --- In-Memory Processing Pipeline ---
+        kf = extract_keystroke_features(kb_events_batch)
+        mf_move, mf_click = extract_mouse_features(ms_events_batch)
+        
+        total_activity = len(kf) + len(mf_move) + len(mf_click)
+
+        if total_activity >= ACTIVITY_THRESHOLD:
+            cd_vector = generate_cd_vector(kf, mf_move, mf_click, label=1)
+            cd_vector["Timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cd_vector = cd_vector[HEADERS] # Ensure correct column order
+            
+            cd_vector.to_csv(CD_VECTOR_CSV_PATH, mode='a', index=False, header=False)
+            print(f"✅ CD vector saved. (Activity count: {total_activity})")
+        else:
+            print(f"⏳ Waiting for more activity... (Current: {total_activity})")
+
+if __name__ == "__main__":
+    main()

@@ -521,14 +521,13 @@ def main():
         "lstm_autoencoder": 3, "isolation_forest": 2, "oneclass_svm": 2,
         "lof": 1, "elliptic_envelope": 1, "rf_model": 1
     }
-    ANOMALY_THRESHOLD = 3 # Score needed to count as one "strike"
+    # ### THIS IS THE KEY CHANGE ###
+    # Lowered to make the system more sensitive to weaker signals.
+    ANOMALY_THRESHOLD = 2 
 
-    # --- ### NEW: "Three Strikes" System Parameters ### ---
+    # --- "Three Strikes" System Parameters ---
     STRIKE_THRESHOLD = 3 
     STRIKE_PENALTY = 0.7 # Applies a 30% confidence reduction
-
-    history_buffer = deque(maxlen=10)
-    trusted_data_buffer = []
     
     print("✅ Initialization complete. Starting monitoring loop...")
 

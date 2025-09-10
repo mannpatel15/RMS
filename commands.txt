@@ -3,3 +3,5 @@ launchctl load ~/Library/LaunchAgents/com.cua.mastercapture.plist
 launchctl list | grep com.cua.mastercapture
 nano ~/Library/LaunchAgents/com.cua.mastercapture.plist
 ./stop_all.sh
+nano ~/Library/LaunchAgents/com.cua.cuamonitor.plist
+launchctl load ~/Library/LaunchAgents/com.cua.cuamonitor.plist

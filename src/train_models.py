@@ -526,7 +526,9 @@ def main(argv=None):
     for col in numeric_cols:
         fill_value = 0.0 if "count" in col.lower() else df_num[col].median()
         if np.isnan(fill_value): fill_value = 0.0
-        df_num[col].fillna(fill_value, inplace=True)
+        # ### THIS IS THE FIX ###
+        # This is the modern, safe way to fill missing values
+        df_num[col] = df_num[col].fillna(fill_value) 
         imputer_map[col] = float(fill_value)
 
     X = df_num.values.astype(np.float32)

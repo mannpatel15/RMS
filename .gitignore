@@ -5,3 +5,4 @@ __pycache__/
 models/
 cua_state.json
 plist.txt
+run_monitor.sh
